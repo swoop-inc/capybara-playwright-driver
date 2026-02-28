@@ -6,8 +6,36 @@ module Capybara
       extend Forwardable
       include DriverExtension
 
+      class << self
+        attr_accessor :playwright_browser
+        attr_accessor :browser_runner
+
+        def playwright_browser
+          @playwright_browser ||= create_playwright_browser
+        end
+
+        def create_playwright_browser
+          # clean up @playwright_browser and @playwright_execution on exit.
+          main = Process.pid
+          at_exit do
+            # Store the exit status of the test run since it goes away after calling the at_exit proc...
+            @exit_status = $ERROR_INFO.status if $ERROR_INFO.is_a?(SystemExit)
+            quit if Process.pid == main
+            exit @exit_status if @exit_status # Force exit with stored status
+          end
+
+          @browser_runner.start
+        end
+
+        def quit
+          @playwright_browser&.close
+          @playwright_browser = nil
+          @browser_runner.stop
+        end
+      end
+
       def initialize(app, **options)
-        @browser_runner = BrowserRunner.new(options)
+        self.class.browser_runner = BrowserRunner.new(options)
         @page_options = PageOptions.new(options)
         if options[:timeout].is_a?(Numeric) # just for compatibility with capybara-selenium-driver
           @default_navigation_timeout = options[:timeout] * 1000
@@ -28,30 +56,13 @@ module Capybara
         @browser ||= ::Capybara::Playwright::Browser.new(
           driver: self,
           internal_logger: @internal_logger,
-          playwright_browser: playwright_browser,
+          playwright_browser: self.class.playwright_browser,
           page_options: @page_options.value,
           record_video: callback_on_save_screenrecord?,
           callback_on_save_trace: @callback_on_save_trace,
           default_timeout: @default_timeout,
           default_navigation_timeout: @default_navigation_timeout,
         )
-      end
-
-      private def playwright_browser
-        @playwright_browser ||= create_playwright_browser
-      end
-
-      private def create_playwright_browser
-        # clean up @playwright_browser and @playwright_execution on exit.
-        main = Process.pid
-        at_exit do
-          # Store the exit status of the test run since it goes away after calling the at_exit proc...
-          @exit_status = $ERROR_INFO.status if $ERROR_INFO.is_a?(SystemExit)
-          quit if Process.pid == main
-          exit @exit_status if @exit_status # Force exit with stored status
-        end
-
-        @browser_runner.start
       end
 
       private def default_logger
@@ -73,12 +84,6 @@ module Capybara
         def warn(message)
           puts "[WARNING] #{message}"
         end
-      end
-
-      private def quit
-        @playwright_browser&.close
-        @playwright_browser = nil
-        @browser_runner.stop
       end
 
       def reset!
